@@ -1,5 +1,5 @@
 import time
-from procmon import record, CpuMon
+from utiliviz import record, CpuMon
 
 def main():
     with record([CpuMon]) as r:

@@ -1,7 +1,8 @@
 """
-Procmon
+UtiliViz
 
-Processor(s) monitor to profile compute and memory utilization.
+System utilization visualizer to profile compute and memory utilization
+of code blocks.
 """
 from __future__ import print_function, absolute_import
 
@@ -14,7 +15,33 @@ from timeit import default_timer as timer
 import psutil
 
 
+# The interval for the profiler to sample the system.
+DEFAULT_INTERVAL = 0.05  # unit: seconds
+
+
+@contextmanager
+def record(mons):
+    """A context-manager for containing a profiled code-block.
+
+    Example
+    -------
+
+        with utiliviz.record([CpuMon, CudaGpuMon]) as rec:
+            code_being_profiled()
+        rec.make_plot()             # to make Bokeh plot
+        rawdata = rec.get_data()    # to access raw data.
+    """
+    r = Record(mons)
+    r.start()
+    try:
+        yield r.get_result_obj()
+    finally:
+        r.stop()
+
+
 def register_magic(setup_bokeh=False):
+    """Use this in Jupyter/IPython notebooks to install the magic command.
+    """
     from IPython.core.magic import Magics, magics_class, cell_magic
     from IPython.core.magic_arguments import (magic_arguments, argument,
                                               parse_argstring)
@@ -32,8 +59,8 @@ def register_magic(setup_bokeh=False):
                   help='record gpu usage')
         @argument('--cuda', action='store_true', default=False,
                   help='record gpu usage')
-        def procmon_record(self, line, cell):
-            args = parse_argstring(self.procmon_record, line)
+        def utiliviz(self, line, cell):
+            args = parse_argstring(self.utiliviz, line)
             mons = []
             if not args.nocpu:
                 mons.append(CpuMon)
@@ -51,7 +78,7 @@ def register_magic(setup_bokeh=False):
                 for p in results.make_plot():
                     show(p)
             else:
-                print("procmon: insufficient sample data for plotting")
+                print("utiliviz: insufficient sample data for plotting")
 
     ip = get_ipython()
     ip.register_magics(MyMagic)
@@ -84,7 +111,7 @@ class Record(object):
     def __init__(self, mons):
         ctx = mp.get_context('spawn')
         self._queue = ctx.Queue(1)
-        interval = 0.05
+        interval = DEFAULT_INTERVAL
 
         proc = ctx.Process(target=_proc_record,
                            args=(self._queue,
@@ -191,18 +218,6 @@ class RecordedResult(object):
 
         return [plot_data(name, sample_data)
                 for name, sample_data in self.get_data().items()]
-
-
-@contextmanager
-def record(mons):
-    """
-    """
-    r = Record(mons)
-    r.start()
-    try:
-        yield r.get_result_obj()
-    finally:
-        r.stop()
 
 
 class Samples(object):
