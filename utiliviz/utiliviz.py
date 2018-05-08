@@ -56,14 +56,19 @@ def register_magic(setup_bokeh=False):
         @cell_magic
         @magic_arguments()
         @argument('--nocpu', action='store_true', default=False,
-                  help='record gpu usage')
+                  help='do not record CPU usage')
+        @argument('--cpuoverall', action='store_true', default=False,
+                  help='record CPU overall usage')
         @argument('--cuda', action='store_true', default=False,
                   help='record gpu usage')
         def utiliviz(self, line, cell):
             args = parse_argstring(self.utiliviz, line)
             mons = []
             if not args.nocpu:
-                mons.append(CpuMon)
+                if args.cpuoverall:
+                    mons.append(CpuOverallMon)
+                else:
+                    mons.append(CpuMon)
             if args.cuda:
                 mons.append(CudaGpuMon)
             raw_code = cell
@@ -84,14 +89,14 @@ def register_magic(setup_bokeh=False):
     ip.register_magics(MyMagic)
 
 
-def _proc_record(queue, monclses, interval):
+def _proc_record(qread, qwrite, monclses, interval):
     mons = [cls() for cls in monclses]
     samples = Samples(mons)
-    queue.put("STARTED")
+    qwrite.put("STARTED")
 
     while True:
         try:
-            signal = queue.get(True, interval)
+            signal = qread.get(True, interval)
         except Empty:
             samples.sample()
         else:
@@ -99,22 +104,25 @@ def _proc_record(queue, monclses, interval):
             assert signal == 'STOP'
             break
     # Get actual start/stop time
-    queue.put("STOPPED")
-    (ts, te) = queue.get()
+    qwrite.put("STOPPED")
+    (ts, te) = qread.get()
     sampledresult = samples.finalize(ts, te)
-    queue.put(sampledresult)
-    queue.close()
+    qwrite.put(sampledresult)
+    qwrite.close()
+    qread.close()
 
 
 
 class Record(object):
     def __init__(self, mons):
         ctx = mp.get_context('spawn')
-        self._queue = ctx.Queue(1)
+        self._qwrite = ctx.Queue(1)
+        self._qread = ctx.Queue(1)
         interval = DEFAULT_INTERVAL
 
         proc = ctx.Process(target=_proc_record,
-                           args=(self._queue,
+                           args=(self._qwrite,
+                                 self._qread,
                                  mons,
                                  interval))
         self._proc = proc
@@ -124,18 +132,19 @@ class Record(object):
 
     def start(self):
         self._proc.start()
-        got = self._queue.get()
+        got = self._qread.get()
         assert got == 'STARTED'
         self._start_time = timer()
 
     def stop(self):
         self._stop_time = timer()
-        self._queue.put('STOP')
-        got = self._queue.get()
+        self._qwrite.put('STOP')
+        got = self._qread.get()
         assert got == 'STOPPED'
-        self._queue.put((self._start_time, self._stop_time))
-        self.samples = self._queue.get()
-        self._queue.close()
+        self._qwrite.put((self._start_time, self._stop_time))
+        self.samples = self._qread.get()
+        self._qwrite.close()
+        self._qread.close()
         self._proc.join()
 
 
@@ -178,6 +187,10 @@ class RecordedResult(object):
                           x_range=(0, max(ts)), y_range=(0, 105),
                           background_fill_color='#EEEEEE',
                           toolbar_location=None)
+            plot.xaxis.axis_label = 'seconds'
+            plot.yaxis.axis_label = 'util %'
+            plot.xaxis.axis_label_text_font_size = '8pt'
+            plot.yaxis.axis_label_text_font_size = '8pt'
             plot.xgrid.grid_line_color = None
             plot.ygrid.grid_line_color = None
             legend_items = []
@@ -203,11 +216,21 @@ class RecordedResult(object):
                 legend_items.append(('MEM-{}'.format(k), [ln]))
 
             for k, vs in computildata.items():
-                ln = plot.line(ts, vs, line_color=colors[k], line_width=2,
-                               alpha=0.7)
-                cir = plot.circle(ts, vs, fill_color=colors[k],
-                                  line_alpha=0, alpha=0.7)
-                legend_items.append(('{}'.format(k), [ln, cir]))
+                styles = dict(line_color=colors[k], line_width=1,
+                              line_alpha=0.7)
+
+                if '*' in k:
+                    styles.update(line_width=4, line_color='#333333')
+                    ln = plot.line(ts, vs, line_dash='dashed', **styles)
+                    # markers = plot.triangle(ts, vs, size=7, alpha=0.9,
+                    #                         fill_color=styles['line_color'],
+                    #                         line_color=styles['line_color'])
+                    legend_items.append(('{}'.format(k), [ln]))
+                else:
+                    ln = plot.line(ts, vs, **styles)
+                    cir = plot.circle(ts, vs, size=styles['line_width'] + 1,
+                                      fill_color=colors[k], **styles)
+                    legend_items.append(('{}'.format(k), [ln, cir]))
 
             legend = Legend(items=legend_items,
                             label_text_font_size='6pt',
@@ -275,7 +298,9 @@ class CpuMon(Mon):
     """Uses psutil
     """
     _primed = False
+    _percpu = True
     name = 'cpu'
+
 
     def __init__(self):
         if not self._primed:
@@ -291,9 +316,22 @@ class CpuMon(Mon):
 
     def get_processor_util(self):
         out = OrderedDict()
-        for i, v in enumerate(psutil.cpu_percent(percpu=True)):
-            out['cpu{}'.format(i)] = v / 100
+        if self._percpu:
+            values = []
+            for i, v in enumerate(psutil.cpu_percent(percpu=self._percpu)):
+                v /= 100
+                values.append(v)
+                out['cpu{}'.format(i)] = v
+            n = len(out)
+            out['cpu-overall*'] = sum(values) / n
+        else:
+            out['cpu'] = psutil.cpu_percent(percpu=self._percpu) / 100
         return out
+
+
+class CpuOverallMon(CpuMon):
+    _percpu = False
+    name = 'cpu-overall'
 
 
 class CudaGpuMon(Mon):

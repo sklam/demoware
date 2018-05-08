@@ -1,11 +1,12 @@
+from pprint import pprint
 import time
-from utiliviz import record, CpuMon
+import utiliviz as uv
 
 def main():
-    with record([CpuMon]) as r:
+    with uv.record([uv.CpuMon]) as r:
         print("HAHAHA")
-        time.sleep(0.5)
-    print(r.get_data())
+        time.sleep(0.2)
+    pprint(r.get_data())
 
 if __name__ == '__main__':
     main()

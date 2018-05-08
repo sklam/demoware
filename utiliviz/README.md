@@ -38,8 +38,11 @@ plots = rec.make_plot()    # get bokeh plots
 
 ### Monitors
 
-* The CPU monitor is `utiliviz.CpuMon`.  It checks the utilization of system RAM
-  and CPU cores.
+* The CPU monitor is `utiliviz.CpuMon`.  It checks the system RAM and per-core
+  utilization.  The overall CPU utilization is also showed.
+
+* The `utiliviz.CpuOverallMon` is a subset of `utiliviz.CpuMon` that only shows
+  the overall CPU utilization.
 
 * CUDA-GPU profiling is enabled by using the `CudaGpuMon` monitor class.
 
